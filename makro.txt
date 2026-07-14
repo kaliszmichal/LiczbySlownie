@@ -38,10 +38,10 @@ Sub ZamienKwotyNaSlownie()
     regEx.IgnoreCase = True
     czyCosZamieniono = False
     
-    ' --- CZĘŚĆ 1: KWOTY WALUTOWE (PLN, EUR, euro, zł, zł., $) ---
+    ' --- CZĘŚĆ 1: KWOTY WALUTOWE (PLN, EUR, euro, zł, zł., $, €) ---
     docText = zakresRoboczy.Text
-    ' POPRAWKA: Dodano \$ do listy wyszukiwanych walut
-    regEx.Pattern = "\b([0-9][0-9 \xA0]*)(?:,([0-9]{2}))?\s*(PLN|EUR|euro|zł\.?|\$)(?![a-zA-Z0-9ąęćłńóśźżĄĘĆŁŃÓŚŹŻ])(?!\s*\(\s*słownie)"
+    ' POPRAWKA: Dodano € do listy wyszukiwanych walut
+    regEx.Pattern = "\b([0-9][0-9 \xA0]*)(?:,([0-9]{2}))?\s*(PLN|EUR|euro|zł\.?|\$|€)(?![a-zA-Z0-9ąęćłńóśźżĄĘĆŁŃÓŚŹŻ])(?!\s*\(\s*słownie)"
     Set matches = regEx.Execute(docText)
     Set processed = CreateObject("Scripting.Dictionary")
     
@@ -65,10 +65,9 @@ Sub ZamienKwotyNaSlownie()
             ' Rozpoznawanie waluty i ustalanie poprawnej formy gramatycznej
             If waluta = "pln" Or waluta = "zł" Or waluta = "zł." Then
                 walutaFormat = "złotych"
-            ElseIf waluta = "eur" Or waluta = "euro" Then
+            ElseIf waluta = "eur" Or waluta = "euro" Or waluta = "€" Then
                 walutaFormat = "euro"
             ElseIf waluta = "$" Then
-                ' Odmiana słowa "dolar"
                 walutaFormat = SuffixDolara(kwota)
             Else
                 walutaFormat = waluta
@@ -100,9 +99,9 @@ Sub ZamienKwotyNaSlownie()
         End If
     Next match
     
-    ' --- CZĘŚĆ 2: MIARY POWIERZCHNI (m2 lub m²) ---
+    ' --- CZĘŚĆ 2: MIARY POWIERZCHNI (m2 lub m2) ---
     docText = zakresRoboczy.Text
-    regEx.Pattern = "\b([0-9][0-9 \xA0]*)(?:,([0-9]+))?\s*(m2|m²)(?![a-zA-Z0-9ąęćłńóśźżĄĘĆŁŃÓŚŹŻ])(?!\s*\(\s*[^)]*metr)"
+    regEx.Pattern = "\b([0-9][0-9 \xA0]*)(?:,([0-9]+))?\s*(m2|m2)(?![a-zA-Z0-9ąęćłńóśźżĄĘĆŁŃÓŚŹŻ])(?!\s*\(\s*[^)]*metr)"
     Set matches = regEx.Execute(docText)
     Set processed = CreateObject("Scripting.Dictionary")
     
@@ -241,7 +240,7 @@ Sub ZamienKwotyNaSlownie()
     Application.ScreenUpdating = True
 End Sub
 
-' NOWA POMOCNICZA FUNKCJA: Odmienia słowo "dolar" na podstawie kwoty
+' POMOCNICZA FUNKCJA: Odmienia słowo "dolar" na podstawie kwoty
 Function SuffixDolara(ByVal liczba As Variant) As String
     Dim n As String
     n = Replace(CStr(liczba), " ", "")
@@ -285,7 +284,7 @@ Function PowierzchniaSlownie(ByVal czescCalkowita As String, ByVal czescUlamkowa
         ulaNum = CInt(czescUlamkowa)
         slownieUlamek = LiczbaSlownie(czescUlamkowa)
         If ulaNum = 1 Then
-            sufSetnych = "jedna setna" 
+            sufSetnych = "jedna setna"
             wynik = wynik & " i " & czescUlamkowa & "/100 " & sufSetnych
         Else
             Dim ost2 As Integer, ost1 As Integer
