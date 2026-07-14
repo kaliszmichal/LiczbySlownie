@@ -8,14 +8,15 @@ Sub ZamienKwotyNaSlownie()
     Dim processed As Object
     Dim rng As Range
     Dim zakresRoboczy As Range
+    Dim czyCalyDokument As Boolean
+    Dim czyCosZamieniono As Boolean ' Flaga blokująca nakładanie się Części 4
     
-    ' Zmienne dla walut (zadeklarowane jako Variant, aby zapobiec konfliktom typów)
+    ' Zmienne dla walut
     Dim kwota As Variant, grosze As Variant, waluta As Variant
     Dim slownieWaluta As String, walutaFormat As String, groszeTekst As String
     
     ' Zmienne dla powierzchni
-    Dim powierzchnia As Variant, jednostka As Variant
-    Dim slowniePowierzchnia As String, suffix As String
+    Dim powCalkowita As String, powUlamek As String, slowniePowierzchnia As String
     
     ' Zmienne dla ułamków
     Dim przedChar As String
@@ -23,22 +24,22 @@ Sub ZamienKwotyNaSlownie()
     Dim slownieLicznik As String, slownieMianownik As String
     
     ' OKREŚLENIE ZAKRESU DZIAŁANIA:
-    ' Jeśli użytkownik zaznaczył tekst, pracujemy tylko na zaznaczeniu.
-    ' Jeśli nic nie zaznaczył (tylko kursor), pracujemy na całym dokumencie.
     If Selection.Start = Selection.End Then
         Set zakresRoboczy = ActiveDocument.Range
+        czyCalyDokument = True
     Else
         Set zakresRoboczy = Selection.Range
+        czyCalyDokument = False
     End If
     
     Application.ScreenUpdating = False
     Set regEx = CreateObject("VBScript.RegExp")
     regEx.Global = True
     regEx.IgnoreCase = True
+    czyCosZamieniono = False
     
     ' --- CZĘŚĆ 1: KWOTY WALUTOWE (PLN, EUR, euro, zł, zł.) ---
     docText = zakresRoboczy.Text
-    ' Wzorzec uwzględniający spacje oraz twarde spacje \xA0 wewnątrz kwot
     regEx.Pattern = "\b([0-9][0-9 \xA0]*)(?:,([0-9]{2}))?\s*(PLN|EUR|euro|zł\.?)(?![a-zA-Z0-9ąęćłńóśźżĄĘĆŁŃÓŚŹŻ])(?!\s*\(\s*słownie)"
     Set matches = regEx.Execute(docText)
     Set processed = CreateObject("Scripting.Dictionary")
@@ -48,7 +49,6 @@ Sub ZamienKwotyNaSlownie()
         If Not processed.Exists(fullMatch) Then
             processed.Add fullMatch, True
             
-            ' Dokładne oczyszczenie kwoty ze spacji (w tym twardych spacji)
             kwota = Replace(match.SubMatches(0), " ", "")
             kwota = Replace(kwota, Chr(160), "")
             
@@ -81,19 +81,20 @@ Sub ZamienKwotyNaSlownie()
                 .Text = fullMatch
                 .replacement.Text = replacement
                 .Forward = True
-                .Wrap = 0 ' wdFindStop (szukaj i zamieniaj wyłącznie w zaznaczonym obszarze)
+                .Wrap = 0
                 .Format = False
                 .MatchCase = False
                 .MatchWholeWord = False
                 .MatchWildcards = False
-                .Execute Replace:=2 ' wdReplaceAll
+                .Execute Replace:=2
             End With
+            czyCosZamieniono = True
         End If
     Next match
     
     ' --- CZĘŚĆ 2: MIARY POWIERZCHNI (m2 lub m2) ---
     docText = zakresRoboczy.Text
-    regEx.Pattern = "\b([0-9][0-9 \xA0]*)\s*(m2|m2)(?![a-zA-Z0-9ąęćłńóśźżĄĘĆŁŃÓŚŹŻ])(?!\s*\(\s*[^)]*metr)"
+    regEx.Pattern = "\b([0-9][0-9 \xA0]*)(?:,([0-9]+))?\s*(m2|m2)(?![a-zA-Z0-9ąęćłńóśźżĄĘĆŁŃÓŚŹŻ])(?!\s*\(\s*[^)]*metr)"
     Set matches = regEx.Execute(docText)
     Set processed = CreateObject("Scripting.Dictionary")
     
@@ -102,14 +103,17 @@ Sub ZamienKwotyNaSlownie()
         If Not processed.Exists(fullMatch) Then
             processed.Add fullMatch, True
             
-            powierzchnia = Replace(match.SubMatches(0), " ", "")
-            powierzchnia = Replace(powierzchnia, Chr(160), "")
-            jednostka = match.SubMatches(1)
+            powCalkowita = Replace(match.SubMatches(0), " ", "")
+            powCalkowita = Replace(powCalkowita, Chr(160), "")
             
-            slowniePowierzchnia = LiczbaSlownie(powierzchnia)
-            suffix = SuffixMetra(powierzchnia)
+            If Not IsEmpty(match.SubMatches(1)) Then
+                powUlamek = match.SubMatches(1)
+            Else
+                powUlamek = ""
+            End If
             
-            replacement = fullMatch & " (" & slowniePowierzchnia & " " & suffix & ")"
+            slowniePowierzchnia = PowierzchniaSlownie(powCalkowita, powUlamek)
+            replacement = fullMatch & " (" & slowniePowierzchnia & ")"
             
             Set rng = zakresRoboczy.Duplicate
             With rng.Find
@@ -117,13 +121,14 @@ Sub ZamienKwotyNaSlownie()
                 .Text = fullMatch
                 .replacement.Text = replacement
                 .Forward = True
-                .Wrap = 0 ' wdFindStop
+                .Wrap = 0
                 .Format = False
                 .MatchCase = False
                 .MatchWholeWord = False
                 .MatchWildcards = False
                 .Execute Replace:=2
             End With
+            czyCosZamieniono = True
         End If
     Next match
     
@@ -141,12 +146,10 @@ Sub ZamienKwotyNaSlownie()
             przedChar = Mid(docText, match.FirstIndex, 1)
         End If
         
-        ' Sprawdzamy, czy ułamek nie jest częścią zapisu groszy " i XX/100"
         Dim jestGroszem As Boolean
         jestGroszem = False
         If match.FirstIndex >= 3 Then
             Dim startPoz As Long
-            ' Zastąpienie Excelowego WorksheetFunction.Max czystym kodem Word VBA
             If match.FirstIndex - 10 > 1 Then
                 startPoz = match.FirstIndex - 10
             Else
@@ -155,7 +158,7 @@ Sub ZamienKwotyNaSlownie()
             
             Dim kontekstPrzed As String
             kontekstPrzed = Mid(docText, startPoz, 11)
-            If InStr(LCase(kontekstPrzed), " i ") > 0 Or InStr(LCase(kontekstPrzed), "słownie") > 0 Then
+            If InStr(LCase(kontekstPrzed), " i ") > 0 Or InStr(LCase(kontekstPrzed), "słownie") > 0 Or InStr(LCase(kontekstPrzed), "metr") > 0 Then
                 jestGroszem = True
             End If
         End If
@@ -178,21 +181,91 @@ Sub ZamienKwotyNaSlownie()
                     .Text = fullMatch
                     .replacement.Text = replacement
                     .Forward = True
-                    .Wrap = 0 ' wdFindStop
+                    .Wrap = 0
                     .Format = False
                     .MatchCase = False
                     .MatchWholeWord = False
                     .MatchWildcards = False
                     .Execute Replace:=2
                 End With
+                czyCosZamieniono = True
             End If
         End If
     Next match
     
+    ' --- CZĘŚĆ 4: SAME LICZBY CAŁKOWITE (Działa tylko przy ZAZNACZENIU tekstu) ---
+    If Not czyCalyDokument And Not czyCosZamieniono Then
+        docText = zakresRoboczy.Text
+        regEx.Pattern = "\b([0-9][0-9 \xA0]*)\b(?![a-zA-Z0-9ąęćłńóśźżĄĘĆŁŃÓŚŹŻ])(?!\s*\(\s*słownie)"
+        Set matches = regEx.Execute(docText)
+        Set processed = CreateObject("Scripting.Dictionary")
+        
+        For Each match In matches
+            fullMatch = match.Value
+            If Not processed.Exists(fullMatch) Then
+                processed.Add fullMatch, True
+                
+                Dim czystaLiczba As String
+                czystaLiczba = Replace(fullMatch, " ", "")
+                czystaLiczba = Replace(czystaLiczba, Chr(160), "")
+                
+                If IsNumeric(czystaLiczba) Then
+                    replacement = fullMatch & " (słownie: " & LiczbaSlownie(czystaLiczba) & ")"
+                    
+                    Set rng = zakresRoboczy.Duplicate
+                    With rng.Find
+                        .ClearFormatting
+                        .Text = fullMatch
+                        .replacement.Text = replacement
+                        .Forward = True
+                        .Wrap = 0
+                        .Format = False
+                        .MatchCase = False
+                        .MatchWholeWord = False
+                        .MatchWildcards = False
+                        .Execute Replace:=2
+                    End With
+                End If
+            End If
+        Next match
+    End If
+    
     Application.ScreenUpdating = True
 End Sub
 
-' Generator odmiany "metra kwadratowego"
+Function PowierzchniaSlownie(ByVal czescCalkowita As String, ByVal czescUlamkowa As String) As String
+    Dim wynik As String
+    Dim slownieCala As String
+    Dim suf As String
+    slownieCala = LiczbaSlownie(czescCalkowita)
+    suf = SuffixMetra(czescCalkowita)
+    wynik = slownieCala & " " & suf
+    If czescUlamkowa <> "" And Val(czescUlamkowa) > 0 Then
+        If Len(czescUlamkowa) = 1 Then czescUlamkowa = czescUlamkowa & "0"
+        If Len(czescUlamkowa) > 2 Then czescUlamkowa = Left(czescUlamkowa, 2)
+        Dim slownieUlamek As String, sufSetnych As String, ulaNum As Integer
+        ulaNum = CInt(czescUlamkowa)
+        slownieUlamek = LiczbaSlownie(czescUlamkowa)
+        If ulaNum = 1 Then
+            sufSetnych = "jedna setna"
+            wynik = wynik & " i " & czescUlamkowa & "/100 " & sufSetnych
+        Else
+            Dim ost2 As Integer, ost1 As Integer
+            ost2 = ulaNum Mod 100
+            ost1 = ulaNum Mod 10
+            If ost2 >= 12 And ost2 <= 14 Then
+                sufSetnych = "setnych"
+            ElseIf ost1 >= 2 And ost1 <= 4 Then
+                sufSetnych = "setne"
+            Else
+                sufSetnych = "setnych"
+            End If
+            wynik = wynik & " i " & czescUlamkowa & "/100 " & slownieUlamek & " " & sufSetnych
+        End If
+    End If
+    PowierzchniaSlownie = wynik
+End Function
+
 Function SuffixMetra(ByVal liczba As Variant) As String
     Dim n As String
     n = Replace(CStr(liczba), " ", "")
@@ -203,17 +276,16 @@ Function SuffixMetra(ByVal liczba As Variant) As String
         Exit Function
     End If
     
-    Dim lenN As Integer
-    lenN = Len(n)
+    Dim lenN As Integer: lenN = Len(n)
+    Dim ostatnie2 As Integer, ostatnia As Integer
     
-    Dim ostatnie2 As Integer
-    Dim ostatnia As Integer
-    
+    ' POPRAWKA: Usunięcie dwukropków i rozbicie jednoliniowego If na poprawny blok
     If lenN >= 2 Then
         ostatnie2 = CInt(Right(n, 2))
     Else
         ostatnie2 = CInt(n)
     End If
+    
     ostatnia = CInt(Right(n, 1))
     
     If ostatnie2 >= 12 And ostatnie2 <= 14 Then
@@ -225,48 +297,33 @@ Function SuffixMetra(ByVal liczba As Variant) As String
     End If
 End Function
 
-' Główna funkcja zamieniająca liczby na zapis słowny (np. 1000 -> "jeden tysiąc")
 Function LiczbaSlownie(ByVal liczba As Variant) As String
-    Dim jednosci As Variant, dziesiatki As Variant, setki As Variant
-    Dim nascie As Variant
-    Dim potegi(3, 3) As String
-    Dim strLiczba As String
-    
-    ' Bezwzględne czyszczenie wszelkich spacji wewnątrz wejściowego ciągu liczb
+    Dim jednosci As Variant, dziesiatki As Variant, setki As Variant, nascie As Variant
+    Dim potegi(3, 3) As String, strLiczba As String
     strLiczba = Replace(CStr(liczba), " ", "")
     strLiczba = Replace(strLiczba, Chr(160), "")
-    
-    ' Definicje słowników
     jednosci = Array("", "jeden", "dwa", "trzy", "cztery", "pięć", "sześć", "siedem", "osiem", "dziewięć")
     nascie = Array("dziesięć", "jedenaście", "dwanaście", "trzynaście", "czternaście", "piętnaście", "szesnaście", "siedemnaście", "osiemnaście", "dziewiętnaście")
     dziesiatki = Array("", "", "dwadzieścia", "trzydzieści", "czterdzieści", "pięćdziesiąt", "sześćdziesiąt", "siedemdziesiąt", "osiemdziesiąt", "dziewięćdziesiąt")
     setki = Array("", "sto", "dwieście", "trzysta", "czterysta", "pięćset", "sześćset", "siedemset", "osiemset", "dziewięćset")
-    
-    potegi(0, 0) = "":        potegi(0, 1) = "":         potegi(0, 2) = ""
     potegi(1, 0) = "tysiąc":  potegi(1, 1) = "tysiące":  potegi(1, 2) = "tysięcy"
     potegi(2, 0) = "milion":  potegi(2, 1) = "miliony":  potegi(2, 2) = "milionów"
     potegi(3, 0) = "miliard": potegi(3, 1) = "miliardy": potegi(3, 2) = "miliardów"
-    
-    Dim wynik As String
-    Dim i As Integer, dlugosc As Integer
-    Dim triada As String, temp As String
-    Dim setka As Integer, dziesiatka As Integer, jednosc As Integer
-    Dim forma As Integer, j_calkowita As Integer
+    Dim wynik As String, i As Integer, dlugosc As Integer, triada As String, temp As String
+    Dim setka As Integer, dziesiatka As Integer, jednosc As Integer, forma As Integer, j_calkowita As Integer
     
     If strLiczba = "0" Or strLiczba = "" Then
         LiczbaSlownie = "zero"
         Exit Function
     End If
     
-    ' Dopełnianie zerami do pełnych triad (grup po 3 cyfry)
     dlugosc = Len(strLiczba)
     If dlugosc Mod 3 > 0 Then
         strLiczba = String(3 - (dlugosc Mod 3), "0") & strLiczba
     End If
     
     dlugosc = Len(strLiczba)
-    Dim g As Integer
-    g = (dlugosc \ 3) - 1
+    Dim g As Integer: g = (dlugosc \ 3) - 1
     
     For i = 1 To dlugosc Step 3
         triada = Mid(strLiczba, i, 3)
@@ -283,12 +340,9 @@ Function LiczbaSlownie(ByVal liczba As Variant) As String
                 temp = temp & nascie(jednosc) & " "
             Else
                 If dziesiatka > 1 Then temp = temp & dziesiatki(dziesiatka) & " "
-                If jednosc > 0 Then
-                    temp = temp & jednosci(jednosc) & " "
-                End If
+                If jednosc > 0 Then temp = temp & jednosci(jednosc) & " "
             End If
             
-            ' Wybór poprawnej formy gramatycznej dla potęgi (tysiąc/tysiące/tysięcy)
             If j_calkowita = 1 Then
                 forma = 0
             ElseIf (dziesiatka <> 1) And (jednosc >= 2 And jednosc <= 4) Then
@@ -296,11 +350,9 @@ Function LiczbaSlownie(ByVal liczba As Variant) As String
             Else
                 forma = 2
             End If
-            
             wynik = wynik & temp & potegi(g, forma) & " "
         End If
         g = g - 1
     Next i
-    
     LiczbaSlownie = Trim(wynik)
 End Function
